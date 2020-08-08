@@ -21,10 +21,10 @@ package org.apache.flink.table.functions.hive;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.catalog.hive.client.HiveShim;
 import org.apache.flink.table.catalog.hive.client.HiveShimLoader;
-import org.apache.flink.table.catalog.hive.util.HiveReflectionUtils;
 import org.apache.flink.table.functions.hive.util.TestHiveUDFArray;
 import org.apache.flink.table.types.DataType;
 
+import org.apache.hadoop.hive.ql.exec.UDF;
 import org.apache.hadoop.hive.ql.udf.UDFBase64;
 import org.apache.hadoop.hive.ql.udf.UDFBin;
 import org.apache.hadoop.hive.ql.udf.UDFConv;
@@ -38,6 +38,8 @@ import org.junit.Test;
 
 import java.io.UnsupportedEncodingException;
 import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Timestamp;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -47,6 +49,30 @@ import static org.junit.Assert.assertTrue;
  */
 public class HiveSimpleUDFTest {
 	private static HiveShim hiveShim = HiveShimLoader.loadHiveShim(HiveShimLoader.getHiveVersion());
+
+	@Test
+	public void testBooleanUDF() {
+		HiveSimpleUDF udf = init(BooleanUDF.class, new DataType[]{ DataTypes.INT()});
+		assertTrue((boolean) udf.eval(1));
+	}
+
+	@Test
+	public void testFloatUDF() {
+		HiveSimpleUDF udf = init(FloatUDF.class, new DataType[]{ DataTypes.FLOAT()});
+		assertEquals(3.0f, (float) udf.eval(3.0f), 0);
+	}
+
+	@Test
+	public void testIntUDF() {
+		HiveSimpleUDF udf = init(IntUDF.class, new DataType[]{ DataTypes.INT()});
+		assertEquals(3, (int) udf.eval(3));
+	}
+
+	@Test
+	public void testStringUDF() {
+		HiveSimpleUDF udf = init(StringUDF.class, new DataType[]{ DataTypes.STRING()});
+		assertEquals("test", udf.eval("test"));
+	}
 
 	@Test
 	public void testUDFRand() {
@@ -132,8 +158,8 @@ public class HiveSimpleUDFTest {
 			});
 
 		assertEquals(29, udf.eval("1969-07-20"));
-		assertEquals(29, udf.eval(HiveReflectionUtils.convertToHiveDate(hiveShim, "1969-07-20")));
-		assertEquals(29, udf.eval(HiveReflectionUtils.convertToHiveTimestamp(hiveShim, "1969-07-20 00:00:00")));
+		assertEquals(29, udf.eval(Date.valueOf("1969-07-20")));
+		assertEquals(29, udf.eval(Timestamp.valueOf("1969-07-20 00:00:00")));
 		assertEquals(1, udf.eval("1980-12-31 12:59:59"));
 	}
 
@@ -228,5 +254,41 @@ public class HiveSimpleUDFTest {
 		udf.open(null);
 
 		return udf;
+	}
+
+	/**
+	 * Boolean Test UDF.
+	 */
+	public static class BooleanUDF extends UDF {
+		public boolean evaluate(int content) {
+			return content == 1;
+		}
+	}
+
+	/**
+	 * Float Test UDF.
+	 */
+	public static class FloatUDF extends UDF {
+		public float evaluate(float content) {
+			return content;
+		}
+	}
+
+	/**
+	 * Int Test UDF.
+	 */
+	public static class IntUDF extends UDF {
+		public int evaluate(int content) {
+			return content;
+		}
+	}
+
+	/**
+	 * String Test UDF.
+	 */
+	public static class StringUDF extends UDF {
+		public String evaluate(String content) {
+			return content;
+		}
 	}
 }

@@ -19,9 +19,8 @@
 package org.apache.flink.table.planner.plan.nodes.physical.batch
 
 import org.apache.flink.api.dag.Transformation
-import org.apache.flink.streaming.api.transformations.OneInputTransformation
 import org.apache.flink.table.api.config.ExecutionConfigOptions
-import org.apache.flink.table.dataformat.BaseRow
+import org.apache.flink.table.data.RowData
 import org.apache.flink.table.functions.UserDefinedFunction
 import org.apache.flink.table.planner.calcite.FlinkRelBuilder.PlannerNamedWindowProperty
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory
@@ -31,12 +30,12 @@ import org.apache.flink.table.planner.delegation.BatchPlanner
 import org.apache.flink.table.planner.plan.cost.{FlinkCost, FlinkCostFactory}
 import org.apache.flink.table.planner.plan.logical.LogicalWindow
 import org.apache.flink.table.planner.plan.nodes.exec.{BatchExecNode, ExecNode}
-import org.apache.flink.table.planner.plan.nodes.resource.NodeResourceUtil
 import org.apache.flink.table.planner.plan.utils.AggregateUtil.transformToBatchAggregateInfoList
 import org.apache.flink.table.planner.plan.utils.FlinkRelMdUtil
 import org.apache.flink.table.runtime.operators.CodeGenOperatorFactory
 import org.apache.flink.table.runtime.operators.aggregate.BytesHashMap
-import org.apache.flink.table.runtime.typeutils.BaseRowTypeInfo
+import org.apache.flink.table.runtime.typeutils.InternalTypeInfo
+
 import org.apache.calcite.plan.{RelOptCluster, RelOptCost, RelOptPlanner, RelTraitSet}
 import org.apache.calcite.rel.RelNode
 import org.apache.calcite.rel.`type`.RelDataType
@@ -81,7 +80,7 @@ abstract class BatchExecHashWindowAggregateBase(
     enableAssignPane,
     isMerge,
     isFinal)
-  with BatchExecNode[BaseRow] {
+  with BatchExecNode[RowData] {
 
   override def computeSelfCost(planner: RelOptPlanner, mq: RelMetadataQuery): RelOptCost = {
     val numOfGroupKey = grouping.length
@@ -117,10 +116,10 @@ abstract class BatchExecHashWindowAggregateBase(
   }
 
   override protected def translateToPlanInternal(
-      planner: BatchPlanner): Transformation[BaseRow] = {
+      planner: BatchPlanner): Transformation[RowData] = {
     val config = planner.getTableConfig
     val input = getInputNodes.get(0).translateToPlan(planner)
-        .asInstanceOf[Transformation[BaseRow]]
+        .asInstanceOf[Transformation[RowData]]
     val ctx = CodeGeneratorContext(config)
     val outputType = FlinkTypeFactory.toLogicalRowType(getRowType)
     val inputType = FlinkTypeFactory.toLogicalRowType(inputRowType)
@@ -133,26 +132,22 @@ abstract class BatchExecHashWindowAggregateBase(
 
     val (windowSize: Long, slideSize: Long) = WindowCodeGenerator.getWindowDef(window)
 
-    val memText = config.getConfiguration.getString(
-      ExecutionConfigOptions.TABLE_EXEC_RESOURCE_HASH_AGG_MEMORY)
-    val managedMemoryInMB = MemorySize.parse(memText).getMebiBytes
-    val managedMemory = managedMemoryInMB * NodeResourceUtil.SIZE_IN_MB
-
     val generatedOperator = new HashWindowCodeGenerator(
       ctx, relBuilder, window, inputTimeFieldIndex,
       inputTimeIsDate, namedProperties,
       aggInfos, inputRowType, grouping, auxGrouping, enableAssignPane, isMerge, isFinal).gen(
-      inputType, outputType, groupBufferLimitSize, managedMemory, 0,
+      inputType, outputType, groupBufferLimitSize, 0,
       windowSize, slideSize)
-    val operator = new CodeGenOperatorFactory[BaseRow](generatedOperator)
-    val ret = new OneInputTransformation(
+    val operator = new CodeGenOperatorFactory[RowData](generatedOperator)
+
+    val managedMemory = MemorySize.parse(config.getConfiguration.getString(
+      ExecutionConfigOptions.TABLE_EXEC_RESOURCE_HASH_AGG_MEMORY)).getBytes
+    ExecNode.createOneInputTransformation(
       input,
       getRelDetailedDescription,
       operator,
-      BaseRowTypeInfo.of(outputType),
-      input.getParallelism)
-    val resource = NodeResourceUtil.fromManagedMem(managedMemoryInMB)
-    ret.setResources(resource, resource)
-    ret
+      InternalTypeInfo.of(outputType),
+      input.getParallelism,
+      managedMemory)
   }
 }

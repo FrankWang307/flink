@@ -18,32 +18,51 @@
 
 package org.apache.flink.table.client.gateway.local;
 
-import org.apache.flink.api.common.ExecutionConfig;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.client.cli.DefaultCLI;
+import org.apache.flink.client.deployment.DefaultClusterClientServiceLoader;
+import org.apache.flink.client.python.PythonFunctionFactory;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.CoreOptions;
+import org.apache.flink.configuration.PipelineOptions;
+import org.apache.flink.configuration.RestartStrategyOptions;
+import org.apache.flink.runtime.execution.librarycache.FlinkUserCodeClassLoaders;
+import org.apache.flink.streaming.api.TimeCharacteristic;
+import org.apache.flink.streaming.api.environment.StreamPipelineOptions;
+import org.apache.flink.table.api.TableConfig;
 import org.apache.flink.table.api.TableEnvironment;
+import org.apache.flink.table.api.TableSchema;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.api.config.OptimizerConfigOptions;
-import org.apache.flink.table.api.java.StreamTableEnvironment;
 import org.apache.flink.table.catalog.Catalog;
+import org.apache.flink.table.catalog.GenericInMemoryCatalog;
 import org.apache.flink.table.catalog.hive.HiveCatalog;
 import org.apache.flink.table.client.config.Environment;
+import org.apache.flink.table.client.config.entries.CatalogEntry;
 import org.apache.flink.table.client.gateway.SessionContext;
 import org.apache.flink.table.client.gateway.utils.DummyTableSourceFactory;
 import org.apache.flink.table.client.gateway.utils.EnvironmentFileUtil;
+import org.apache.flink.table.factories.CatalogFactory;
+import org.apache.flink.table.functions.python.PythonScalarFunction;
+import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.TimestampKind;
+import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.util.StringUtils;
 
 import org.apache.commons.cli.Options;
 import org.junit.Test;
 
+import java.net.URL;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.apache.flink.util.FlinkUserCodeClassLoader.NOOP_EXCEPTION_HANDLER;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -57,24 +76,33 @@ public class ExecutionContextTest {
 
 	private static final String DEFAULTS_ENVIRONMENT_FILE = "test-sql-client-defaults.yaml";
 	private static final String MODULES_ENVIRONMENT_FILE = "test-sql-client-modules.yaml";
-	private static final String CATALOGS_ENVIRONMENT_FILE = "test-sql-client-catalogs.yaml";
+	public static final String CATALOGS_ENVIRONMENT_FILE = "test-sql-client-catalogs.yaml";
 	private static final String STREAMING_ENVIRONMENT_FILE = "test-sql-client-streaming.yaml";
 	private static final String CONFIGURATION_ENVIRONMENT_FILE = "test-sql-client-configuration.yaml";
+	private static final String FUNCTION_ENVIRONMENT_FILE = "test-sql-client-python-functions.yaml";
 
 	@Test
 	public void testExecutionConfig() throws Exception {
 		final ExecutionContext<?> context = createDefaultExecutionContext();
-		final ExecutionConfig config = context.getExecutionConfig();
+		final TableEnvironment tableEnv = context.getTableEnvironment();
+		final TableConfig tableConfig = tableEnv.getConfig();
 
-		assertEquals(99, config.getAutoWatermarkInterval());
+		assertEquals(1_000, tableConfig.getMinIdleStateRetentionTime());
+		assertEquals(600_000, tableConfig.getMaxIdleStateRetentionTime());
+		Configuration conf = tableConfig.getConfiguration();
 
-		final RestartStrategies.RestartStrategyConfiguration restartConfig = config.getRestartStrategy();
-		assertTrue(restartConfig instanceof RestartStrategies.FailureRateRestartStrategyConfiguration);
-		final RestartStrategies.FailureRateRestartStrategyConfiguration failureRateStrategy =
-			(RestartStrategies.FailureRateRestartStrategyConfiguration) restartConfig;
-		assertEquals(10, failureRateStrategy.getMaxFailureRate());
-		assertEquals(99_000, failureRateStrategy.getFailureInterval().toMilliseconds());
-		assertEquals(1_000, failureRateStrategy.getDelayBetweenAttemptsInterval().toMilliseconds());
+		assertEquals(1, conf.getInteger(CoreOptions.DEFAULT_PARALLELISM));
+		assertEquals(16, conf.getInteger(PipelineOptions.MAX_PARALLELISM));
+
+		assertEquals(TimeCharacteristic.EventTime, conf.get(StreamPipelineOptions.TIME_CHARACTERISTIC));
+		assertEquals(Duration.ofMillis(99), conf.get(PipelineOptions.AUTO_WATERMARK_INTERVAL));
+
+		assertEquals("failure-rate", conf.getString(RestartStrategyOptions.RESTART_STRATEGY));
+		assertEquals(10, conf.getInteger(
+				RestartStrategyOptions.RESTART_STRATEGY_FAILURE_RATE_MAX_FAILURES_PER_INTERVAL));
+		assertEquals(Duration.ofMillis(99_000), conf.get(
+				RestartStrategyOptions.RESTART_STRATEGY_FAILURE_RATE_FAILURE_RATE_INTERVAL));
+		assertEquals(Duration.ofMillis(1_000), conf.get(RestartStrategyOptions.RESTART_STRATEGY_FAILURE_RATE_DELAY));
 	}
 
 	@Test
@@ -83,12 +111,14 @@ public class ExecutionContextTest {
 		final TableEnvironment tableEnv = context.getTableEnvironment();
 
 		Set<String> allModules = new HashSet<>(Arrays.asList(tableEnv.listModules()));
-		assertEquals(2, allModules.size());
+		assertEquals(4, allModules.size());
 		assertEquals(
 			new HashSet<>(
 				Arrays.asList(
 					"core",
-					"mymodule")
+					"mymodule",
+					"myhive",
+					"myhive2")
 			),
 			allModules
 		);
@@ -135,6 +165,8 @@ public class ExecutionContextTest {
 			),
 			allCatalogs
 		);
+
+		context.close();
 	}
 
 	@Test
@@ -166,6 +198,8 @@ public class ExecutionContextTest {
 		tableEnv.useDatabase(DependencyTest.TestHiveCatalogFactory.ADDITIONAL_TEST_DATABASE);
 
 		assertEquals(DependencyTest.TestHiveCatalogFactory.ADDITIONAL_TEST_DATABASE, tableEnv.getCurrentDatabase());
+
+		context.close();
 	}
 
 	@Test
@@ -177,6 +211,22 @@ public class ExecutionContextTest {
 		Arrays.sort(expected);
 		Arrays.sort(actual);
 		assertArrayEquals(expected, actual);
+	}
+
+	@Test
+	public void testPythonFunction() throws Exception {
+		PythonFunctionFactory pythonFunctionFactory = PythonFunctionFactory.PYTHON_FUNCTION_FACTORY_REF.get();
+		PythonFunctionFactory testFunctionFactory = (moduleName, objectName) ->
+			new PythonScalarFunction(null, null, null, null, null, false, null);
+		try {
+			PythonFunctionFactory.PYTHON_FUNCTION_FACTORY_REF.set(testFunctionFactory);
+			ExecutionContext context = createPythonFunctionExecutionContext();
+			final String[] expected = new String[]{"pythonudf"};
+			final String[] actual = context.getTableEnvironment().listUserDefinedFunctions();
+			assertArrayEquals(expected, actual);
+		} finally {
+			PythonFunctionFactory.PYTHON_FUNCTION_FACTORY_REF.set(pythonFunctionFactory);
+		}
 	}
 
 	@Test
@@ -204,7 +254,13 @@ public class ExecutionContextTest {
 
 		assertArrayEquals(
 			new String[]{"integerField", "stringField", "rowtimeField", "integerField0", "stringField0", "rowtimeField0"},
-			tableEnv.scan("TemporalTableUsage").getSchema().getFieldNames());
+			tableEnv.from("TemporalTableUsage").getSchema().getFieldNames());
+
+		// Please delete this test after removing registerTableSourceInternal in SQL-CLI.
+		TableSchema tableSchema = tableEnv.from("EnrichmentSource").getSchema();
+		LogicalType timestampType = tableSchema.getFieldDataTypes()[2].getLogicalType();
+		assertTrue(timestampType instanceof TimestampType);
+		assertEquals(TimestampKind.ROWTIME, ((TimestampType) timestampType).getKind());
 	}
 
 	@Test
@@ -212,58 +268,75 @@ public class ExecutionContextTest {
 		final ExecutionContext<?> context = createConfigurationExecutionContext();
 		final TableEnvironment tableEnv = context.getTableEnvironment();
 
-		assertEquals(
-			100,
-			tableEnv.getConfig().getConfiguration().getInteger(
-				ExecutionConfigOptions.TABLE_EXEC_SORT_DEFAULT_LIMIT));
-		assertTrue(
-			tableEnv.getConfig().getConfiguration().getBoolean(
-				ExecutionConfigOptions.TABLE_EXEC_SPILL_COMPRESSION_ENABLED));
-		assertEquals(
-			"128kb",
-			tableEnv.getConfig().getConfiguration().getString(
-				ExecutionConfigOptions.TABLE_EXEC_SPILL_COMPRESSION_BLOCK_SIZE));
+		Configuration conf = tableEnv.getConfig().getConfiguration();
+		assertEquals(100, conf.getInteger(ExecutionConfigOptions.TABLE_EXEC_SORT_DEFAULT_LIMIT));
+		assertTrue(conf.getBoolean(ExecutionConfigOptions.TABLE_EXEC_SPILL_COMPRESSION_ENABLED));
+		assertEquals("128kb", conf.getString(ExecutionConfigOptions.TABLE_EXEC_SPILL_COMPRESSION_BLOCK_SIZE));
 
-		assertTrue(
-			tableEnv.getConfig().getConfiguration().getBoolean(
-				OptimizerConfigOptions.TABLE_OPTIMIZER_JOIN_REORDER_ENABLED));
+		assertTrue(conf.getBoolean(OptimizerConfigOptions.TABLE_OPTIMIZER_JOIN_REORDER_ENABLED));
 
 		// these options are not modified and should be equal to their default value
 		assertEquals(
 			ExecutionConfigOptions.TABLE_EXEC_SORT_ASYNC_MERGE_ENABLED.defaultValue(),
-			tableEnv.getConfig().getConfiguration().getBoolean(
-				ExecutionConfigOptions.TABLE_EXEC_SORT_ASYNC_MERGE_ENABLED));
+			conf.getBoolean(ExecutionConfigOptions.TABLE_EXEC_SORT_ASYNC_MERGE_ENABLED));
 		assertEquals(
 			ExecutionConfigOptions.TABLE_EXEC_SHUFFLE_MODE.defaultValue(),
-			tableEnv.getConfig().getConfiguration().getString(
-				ExecutionConfigOptions.TABLE_EXEC_SHUFFLE_MODE));
+			conf.getString(ExecutionConfigOptions.TABLE_EXEC_SHUFFLE_MODE));
 		assertEquals(
 			OptimizerConfigOptions.TABLE_OPTIMIZER_BROADCAST_JOIN_THRESHOLD.defaultValue().longValue(),
-			tableEnv.getConfig().getConfiguration().getLong(
-				OptimizerConfigOptions.TABLE_OPTIMIZER_BROADCAST_JOIN_THRESHOLD));
+			conf.getLong(OptimizerConfigOptions.TABLE_OPTIMIZER_BROADCAST_JOIN_THRESHOLD));
 	}
 
+	@Test
+	public void testInitCatalogs() throws Exception{
+		final Map<String, String> replaceVars = createDefaultReplaceVars();
+		Environment env = EnvironmentFileUtil.parseModified(DEFAULTS_ENVIRONMENT_FILE, replaceVars);
+
+		Map<String, Object> catalogProps = new HashMap<>();
+		catalogProps.put("name", "test");
+		catalogProps.put("type", "test_cl_catalog");
+		env.getCatalogs().clear();
+		env.getCatalogs().put("test", CatalogEntry.create(catalogProps));
+		Configuration flinkConfig = new Configuration();
+		ExecutionContext.builder(env,
+				new SessionContext("test-session", new Environment()),
+				Collections.emptyList(),
+				flinkConfig,
+				new DefaultClusterClientServiceLoader(),
+				new Options(),
+				Collections.singletonList(new DefaultCLI(flinkConfig))).build();
+	}
+
+	@SuppressWarnings("unchecked")
 	private <T> ExecutionContext<T> createExecutionContext(String file, Map<String, String> replaceVars) throws Exception {
 		final Environment env = EnvironmentFileUtil.parseModified(
 			file,
 			replaceVars);
 		final Configuration flinkConfig = new Configuration();
-		return new ExecutionContext<>(
-			env,
-			new SessionContext("test-session", new Environment()),
-			Collections.emptyList(),
-			flinkConfig,
-			new Options(),
-			Collections.singletonList(new DefaultCLI(flinkConfig)));
+		return (ExecutionContext<T>) ExecutionContext.builder(
+				env,
+				new SessionContext("test-session", new Environment()),
+				Collections.emptyList(),
+				flinkConfig,
+				new DefaultClusterClientServiceLoader(),
+				new Options(),
+				Collections.singletonList(new DefaultCLI(flinkConfig)))
+				.build();
 	}
 
-	private <T> ExecutionContext<T> createDefaultExecutionContext() throws Exception {
-		final Map<String, String> replaceVars = new HashMap<>();
+	private Map<String, String> createDefaultReplaceVars() {
+		Map<String, String> replaceVars = new HashMap<>();
 		replaceVars.put("$VAR_PLANNER", "old");
 		replaceVars.put("$VAR_EXECUTION_TYPE", "streaming");
 		replaceVars.put("$VAR_RESULT_MODE", "changelog");
 		replaceVars.put("$VAR_UPDATE_MODE", "update-mode: append");
 		replaceVars.put("$VAR_MAX_ROWS", "100");
+		replaceVars.put("$VAR_RESTART_STRATEGY_TYPE", "failure-rate");
+		return replaceVars;
+	}
+
+	private <T> ExecutionContext<T> createDefaultExecutionContext() throws Exception {
+		final Map<String, String> replaceVars = createDefaultReplaceVars();
 		return createExecutionContext(DEFAULTS_ENVIRONMENT_FILE, replaceVars);
 	}
 
@@ -297,5 +370,66 @@ public class ExecutionContextTest {
 
 	private <T> ExecutionContext<T> createConfigurationExecutionContext() throws Exception {
 		return createExecutionContext(CONFIGURATION_ENVIRONMENT_FILE, new HashMap<>());
+	}
+
+	private <T> ExecutionContext<T> createPythonFunctionExecutionContext() throws Exception {
+		return createExecutionContext(FUNCTION_ENVIRONMENT_FILE, new HashMap<>());
+	}
+
+	// a catalog that requires the thread context class loader to be a user code classloader during construction and opening
+	private static class TestClassLoaderCatalog extends GenericInMemoryCatalog {
+
+		private static final Class parentFirstCL = FlinkUserCodeClassLoaders
+			.parentFirst(
+				new URL[0],
+				TestClassLoaderCatalog.class.getClassLoader(),
+				NOOP_EXCEPTION_HANDLER)
+			.getClass();
+		private static final Class childFirstCL = FlinkUserCodeClassLoaders
+			.childFirst(
+				new URL[0],
+				TestClassLoaderCatalog.class.getClassLoader(),
+				new String[0],
+				NOOP_EXCEPTION_HANDLER)
+			.getClass();
+
+		TestClassLoaderCatalog(String name) {
+			super(name);
+			verifyUserClassLoader();
+		}
+
+		@Override
+		public void open() {
+			verifyUserClassLoader();
+			super.open();
+		}
+
+		private void verifyUserClassLoader() {
+			ClassLoader contextLoader = Thread.currentThread().getContextClassLoader();
+			assertTrue(parentFirstCL.isInstance(contextLoader) || childFirstCL.isInstance(contextLoader));
+		}
+	}
+
+	/**
+	 * Factory to create TestClassLoaderCatalog.
+	 */
+	public static class TestClassLoaderCatalogFactory implements CatalogFactory {
+
+		@Override
+		public Catalog createCatalog(String name, Map<String, String> properties) {
+			return new TestClassLoaderCatalog("test_cl");
+		}
+
+		@Override
+		public Map<String, String> requiredContext() {
+			Map<String, String> context = new HashMap<>();
+			context.put("type", "test_cl_catalog");
+			return context;
+		}
+
+		@Override
+		public List<String> supportedProperties() {
+			return Collections.emptyList();
+		}
 	}
 }

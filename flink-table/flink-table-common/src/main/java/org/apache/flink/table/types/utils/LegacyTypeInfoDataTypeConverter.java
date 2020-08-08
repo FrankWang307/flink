@@ -30,9 +30,11 @@ import org.apache.flink.api.java.typeutils.ObjectArrayTypeInfo;
 import org.apache.flink.api.java.typeutils.RowTypeInfo;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.TableException;
+import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.AtomicDataType;
 import org.apache.flink.table.types.CollectionDataType;
 import org.apache.flink.table.types.DataType;
+import org.apache.flink.table.types.DataTypeQueryable;
 import org.apache.flink.table.types.FieldsDataType;
 import org.apache.flink.table.types.KeyValueDataType;
 import org.apache.flink.table.types.logical.LegacyTypeInformationType;
@@ -42,12 +44,12 @@ import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimestampKind;
 import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.table.types.logical.TypeInformationRawType;
-import org.apache.flink.table.types.logical.utils.LogicalTypeChecks;
 import org.apache.flink.table.typeutils.TimeIndicatorTypeInfo;
 import org.apache.flink.table.typeutils.TimeIntervalTypeInfo;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.Preconditions;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -55,7 +57,6 @@ import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.IntStream;
-import java.util.stream.Stream;
 
 import static org.apache.flink.table.types.logical.utils.LogicalTypeChecks.hasRoot;
 import static org.apache.flink.table.types.logical.utils.LogicalTypeChecks.isRowtimeAttribute;
@@ -177,7 +178,7 @@ public final class LegacyTypeInfoDataTypeConverter {
 			return convertToMapType((MapTypeInfo) typeInfo);
 		}
 
-		else if (typeInfo instanceof CompositeType) {
+		else if (typeInfo instanceof CompositeType || isRowData(typeInfo)) {
 			return createLegacyType(LogicalTypeRoot.STRUCTURED_TYPE, typeInfo);
 		}
 
@@ -212,8 +213,22 @@ public final class LegacyTypeInfoDataTypeConverter {
 			return Types.STRING;
 		}
 
-		else if (canConvertToTimestampTypeInfoLenient(dataType)) {
+		// relax the precision constraint as Timestamp can store the highest precision
+		else if (hasRoot(logicalType, LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) &&
+			dataType.getConversionClass() == Timestamp.class) {
 			return Types.SQL_TIMESTAMP;
+		}
+
+		// relax the precision constraint as LocalDateTime can store the highest precision
+		else if (hasRoot(logicalType, LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) &&
+			dataType.getConversionClass() == LocalDateTime.class) {
+			return Types.LOCAL_DATE_TIME;
+		}
+
+		// relax the precision constraint as LocalTime can store the highest precision
+		else if (hasRoot(logicalType, LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE) &&
+			dataType.getConversionClass() == LocalTime.class) {
+			return Types.LOCAL_TIME;
 		}
 
 		else if (canConvertToLegacyTypeInfo(dataType)) {
@@ -250,13 +265,6 @@ public final class LegacyTypeInfoDataTypeConverter {
 				dataType.getConversionClass().getName()));
 	}
 
-	private static boolean canConvertToTimestampTypeInfoLenient(DataType dataType) {
-		LogicalType logicalType = dataType.getLogicalType();
-		return hasRoot(logicalType, LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) &&
-			dataType.getConversionClass() != LocalDateTime.class &&
-			LogicalTypeChecks.getPrecision(logicalType) <= 3;
-	}
-
 	private static DataType createLegacyType(LogicalTypeRoot typeRoot, TypeInformation<?> typeInfo) {
 		return new AtomicDataType(new LegacyTypeInformationType<>(typeRoot, typeInfo))
 			.bridgedTo(typeInfo.getTypeClass());
@@ -275,7 +283,7 @@ public final class LegacyTypeInfoDataTypeConverter {
 
 	private static boolean canConvertToTimeAttributeTypeInfo(DataType dataType) {
 		return hasRoot(dataType.getLogicalType(), LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) &&
-			dataTypeTypeInfoMap.containsKey(dataType) && // checks precision and conversion
+			dataTypeTypeInfoMap.containsKey(dataType.nullable()) && // checks precision and conversion and ignore nullable
 			((TimestampType) dataType.getLogicalType()).getKind() != TimestampKind.REGULAR;
 	}
 
@@ -317,8 +325,8 @@ public final class LegacyTypeInfoDataTypeConverter {
 			.map(RowType.RowField::getName)
 			.toArray(String[]::new);
 
-		final TypeInformation<?>[] fieldTypes = Stream.of(fieldNames)
-			.map(name -> fieldsDataType.getFieldDataTypes().get(name))
+		final TypeInformation<?>[] fieldTypes = fieldsDataType.getChildren()
+			.stream()
 			.map(LegacyTypeInfoDataTypeConverter::toLegacyTypeInfo)
 			.toArray(TypeInformation[]::new);
 
@@ -388,6 +396,18 @@ public final class LegacyTypeInfoDataTypeConverter {
 
 	private static TypeInformation<?> convertToRawTypeInfo(DataType dataType) {
 		return ((TypeInformationRawType) dataType.getLogicalType()).getTypeInformation();
+	}
+
+	/**
+	 * Temporary solution to enable tests with type information and internal data structures until we
+	 * drop all legacy types.
+	 */
+	private static boolean isRowData(TypeInformation<?> typeInfo) {
+		if (!(typeInfo instanceof DataTypeQueryable)) {
+			return false;
+		}
+		final DataType dataType = ((DataTypeQueryable) typeInfo).getDataType();
+		return dataType.getConversionClass() == RowData.class;
 	}
 
 	private LegacyTypeInfoDataTypeConverter() {

@@ -23,6 +23,7 @@ import org.apache.flink.streaming.runtime.tasks.mailbox.Mail;
 import org.apache.flink.streaming.runtime.tasks.mailbox.TaskMailbox;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.function.RunnableWithException;
+import org.apache.flink.util.function.ThrowingRunnable;
 
 import javax.annotation.Nonnull;
 
@@ -89,7 +90,7 @@ public interface MailboxExecutor {
 	 * @throws RejectedExecutionException if this task cannot be accepted for execution, e.g. because the mailbox is
 	 * 		quiesced or closed.
 	 */
-	default void execute(@Nonnull RunnableWithException command, String description) {
+	default void execute(ThrowingRunnable<? extends Exception> command, String description) {
 		execute(command, description, EMPTY_ARGS);
 	}
 
@@ -106,23 +107,7 @@ public interface MailboxExecutor {
 	 * @throws RejectedExecutionException if this task cannot be accepted for execution, e.g. because the mailbox is
 	 * 		quiesced or closed.
 	 */
-	void execute(@Nonnull RunnableWithException command, String descriptionFormat, Object... descriptionArgs);
-
-	/**
-	 * Executes the given command at the next possible time in the mailbox thread. Repeated calls will result in the
-	 * last executed command being executed first.
-	 *
-	 * <p>An optional description can (and should) be added to ease debugging and error-reporting. The description
-	 * may contain placeholder that refer to the provided description arguments using {@link java.util.Formatter}
-	 * syntax. The actual description is only formatted on demand.
-	 *
-	 * @param command the runnable task to add to the mailbox for execution.
-	 * @param descriptionFormat the optional description for the command that is used for debugging and error-reporting.
-	 * @param descriptionArgs the parameters used to format the final description string.
-	 * @throws RejectedExecutionException if this task cannot be accepted for execution, e.g. because the mailbox is
-	 *                                    quiesced or closed.
-	 */
-	void executeFirst(@Nonnull RunnableWithException command, String descriptionFormat, Object... descriptionArgs);
+	void execute(ThrowingRunnable<? extends Exception> command, String descriptionFormat, Object... descriptionArgs);
 
 	/**
 	 * Submits the given command for execution in the future in the mailbox thread and returns a Future representing

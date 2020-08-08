@@ -1,5 +1,5 @@
 ---
-title: "Hive Functions"
+title: "Hive 函数"
 nav-parent_id: hive_tableapi
 nav-pos: 3
 ---
@@ -22,11 +22,60 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-## Hive User Defined Functions
+## 通过 HiveModule 使用 Hive 内置函数
 
-Users can use their existing Hive User Defined Functions in Flink.
+在 Flink SQL 和 Table API 中，可以通过系统内置的 `HiveModule` 来使用 Hive 内置函数，
 
-Supported UDF types include:
+详细信息，请参考 [HiveModule]({{ site.baseurl }}/zh/dev/table/modules.html#hivemodule)。
+
+<div class="codetabs" markdown="1">
+<div data-lang="Java" markdown="1">
+{% highlight java %}
+
+String name            = "myhive";
+String version         = "2.3.4";
+
+tableEnv.loadModue(name, new HiveModule(version));
+{% endhighlight %}
+</div>
+<div data-lang="Scala" markdown="1">
+{% highlight scala %}
+
+val name            = "myhive"
+val version         = "2.3.4"
+
+tableEnv.loadModue(name, new HiveModule(version));
+{% endhighlight %}
+</div>
+<div data-lang="Python" markdown="1">
+{% highlight Python %}
+from pyflink.table.module import HiveModule
+
+name = "myhive"
+version = "2.3.4"
+
+t_env.load_module(name, HiveModule(version))
+{% endhighlight %}
+</div>
+<div data-lang="YAML" markdown="1">
+{% highlight yaml %}
+modules:
+   - name: core
+     type: core
+   - name: myhive
+     type: hive
+{% endhighlight %}
+</div>
+</div>
+
+* 请注意旧版本的部分 Hive 内置函数存在[线程安全问题](https://issues.apache.org/jira/browse/HIVE-16183)。
+我们建议用户及时通过补丁修正 Hive 中的这些问题。
+
+## Hive 用户自定义函数(User Defined Functions)
+
+在 Flink 中用户可以使用 Hive 里已经存在的 UDF 函数。
+
+支持的 UDF 类型包括：
 
 - UDF
 - GenericUDF
@@ -34,24 +83,23 @@ Supported UDF types include:
 - UDAF
 - GenericUDAFResolver2
 
-Upon query planning and execution, Hive's UDF and GenericUDF are automatically translated into Flink's ScalarFunction,
-Hive's GenericUDTF is automatically translated into Flink's TableFunction,
-and Hive's UDAF and GenericUDAFResolver2 are translated into Flink's AggregateFunction.
+在进行查询规划和执行时，Hive UDF 和 GenericUDF 函数会自动转换成 Flink 中的 ScalarFunction，GenericUDTF 会被自动转换成 Flink 中的
+ TableFunction，UDAF 和 GenericUDAFResolver2 则转换成 Flink 聚合函数(AggregateFunction).
 
-To use a Hive User Defined Function, user have to
+想要使用 Hive UDF 函数，需要如下几步：
 
-- set a HiveCatalog backed by Hive Metastore that contains that function as current catalog of the session
-- include a jar that contains that function in Flink's classpath
-- use Blink planner.
+- 通过 Hive Metastore 将带有 UDF 的 HiveCatalog 设置为当前会话的 catalog 后端。
+- 将带有 UDF 的 jar 包放入 Flink classpath 中，并在代码中引入。
+- 使用 Blink planner。
 
-## Using Hive User Defined Functions
+## 使用 Hive UDF
 
-Assuming we have the following Hive functions registered in Hive Metastore:
+假设我们在 Hive Metastore 中已经注册了下面的 UDF 函数：
 
 
 {% highlight java %}
 /**
- * Test simple udf. Registered under name 'myudf'
+ * 注册为 'myudf' 的简单 UDF 测试类. 
  */
 public class TestHiveSimpleUDF extends UDF {
 
@@ -65,7 +113,7 @@ public class TestHiveSimpleUDF extends UDF {
 }
 
 /**
- * Test generic udf. Registered under name 'mygenericudf'
+ * 注册为 'mygenericudf' 的普通 UDF 测试类
  */
 public class TestHiveGenericUDF extends GenericUDF {
 
@@ -98,7 +146,7 @@ public class TestHiveGenericUDF extends GenericUDF {
 }
 
 /**
- * Test split udtf. Registered under name 'mygenericudtf'
+ * 注册为 'mygenericudtf' 的字符串分割 UDF 测试类
  */
 public class TestHiveUDTF extends GenericUDTF {
 
@@ -133,7 +181,7 @@ public class TestHiveUDTF extends GenericUDTF {
 
 {% endhighlight %}
 
-From Hive CLI, we can see they are registered:
+在 Hive CLI 中，可以查询到已经注册的 UDF 函数:
 
 {% highlight bash %}
 hive> show functions;
@@ -145,8 +193,7 @@ myudtf
 
 {% endhighlight %}
 
-
-Then, users can use them in SQL as:
+此时，用户如果想使用这些 UDF，在 SQL 中就可以这样写：
 
 
 {% highlight bash %}
@@ -154,53 +201,3 @@ Then, users can use them in SQL as:
 Flink SQL> select mygenericudf(myudf(name), 1) as a, mygenericudf(myudf(age), 1) as b, s from mysourcetable, lateral table(myudtf(name, 1)) as T(s);
 
 {% endhighlight %}
-
-
-### Limitations
-
-Hive built-in functions are currently not supported out of box in Flink. To use Hive built-in functions, users must register them manually in Hive Metastore first.
-
-Support for Hive functions has only been tested for Flink batch in Blink planner.
-
-Hive functions currently cannot be used across catalogs in Flink.
-
-Please reference to [Hive]({{ site.baseurl }}/dev/table/hive/index.html) for data type limitations.
-
-
-## Use Hive Built-in Functions via HiveModule
-
-The `HiveModule` provides Hive built-in functions as Flink system (built-in) functions to Flink SQL and Table API users.
-
-<div class="codetabs" markdown="1">
-<div data-lang="Java" markdown="1">
-{% highlight java %}
-
-String name            = "myhive";
-String version         = "2.3.4";
-
-tableEnv.loadModue(name, new HiveModule(version));
-{% endhighlight %}
-</div>
-<div data-lang="Scala" markdown="1">
-{% highlight scala %}
-
-val name            = "myhive"
-val version         = "2.3.4"
-
-tableEnv.loadModue(name, new HiveModule(version));
-{% endhighlight %}
-</div>
-<div data-lang="YAML" markdown="1">
-{% highlight yaml %}
-modules:
-   - name: core
-     type: core
-   - name: myhive
-     type: hive
-     hive-version: 2.3.4
-{% endhighlight %}
-</div>
-</div>
-
-* NOTE that some Hive built-in functions in older versions have [thread safety issues](https://issues.apache.org/jira/browse/HIVE-16183).
-We recommend users patch their own Hive to fix them.

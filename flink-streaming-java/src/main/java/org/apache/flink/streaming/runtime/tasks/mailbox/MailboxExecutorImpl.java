@@ -19,8 +19,10 @@ package org.apache.flink.streaming.runtime.tasks.mailbox;
 
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.streaming.api.operators.MailboxExecutor;
+import org.apache.flink.streaming.runtime.tasks.StreamTaskActionExecutor;
+import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.WrappingRuntimeException;
-import org.apache.flink.util.function.RunnableWithException;
+import org.apache.flink.util.function.ThrowingRunnable;
 
 import javax.annotation.Nonnull;
 
@@ -39,30 +41,33 @@ public final class MailboxExecutorImpl implements MailboxExecutor {
 
 	private final int priority;
 
-	public MailboxExecutorImpl(@Nonnull TaskMailbox mailbox, int priority) {
+	private final StreamTaskActionExecutor actionExecutor;
+
+	private final MailboxProcessor mailboxProcessor;
+
+	public MailboxExecutorImpl(@Nonnull TaskMailbox mailbox, int priority, StreamTaskActionExecutor actionExecutor) {
+		this(mailbox, priority, actionExecutor, null);
+	}
+
+	public MailboxExecutorImpl(@Nonnull TaskMailbox mailbox, int priority, StreamTaskActionExecutor actionExecutor, MailboxProcessor mailboxProcessor) {
 		this.mailbox = mailbox;
 		this.priority = priority;
+		this.actionExecutor = Preconditions.checkNotNull(actionExecutor);
+		this.mailboxProcessor = mailboxProcessor;
+	}
+
+	public boolean isIdle() {
+		return !mailboxProcessor.isMailboxLoopRunning() ||
+			(mailboxProcessor.isDefaultActionUnavailable() && !mailbox.hasMail() && mailbox.getState().isAcceptingMails());
 	}
 
 	@Override
 	public void execute(
-		@Nonnull final RunnableWithException command,
-		final String descriptionFormat,
-		final Object... descriptionArgs) {
+			final ThrowingRunnable<? extends Exception> command,
+			final String descriptionFormat,
+			final Object... descriptionArgs) {
 		try {
-			mailbox.put(new Mail(command, priority, descriptionFormat, descriptionArgs));
-		} catch (IllegalStateException mbex) {
-			throw new RejectedExecutionException(mbex);
-		}
-	}
-
-	@Override
-	public void executeFirst(
-		@Nonnull final RunnableWithException command,
-		final String descriptionFormat,
-		final Object... descriptionArgs) {
-		try {
-			mailbox.putFirst(new Mail(command, priority, descriptionFormat, descriptionArgs));
+			mailbox.put(new Mail(command, priority, actionExecutor, descriptionFormat, descriptionArgs));
 		} catch (IllegalStateException mbex) {
 			throw new RejectedExecutionException(mbex);
 		}
@@ -92,4 +97,5 @@ public final class MailboxExecutorImpl implements MailboxExecutor {
 			return false;
 		}
 	}
+
 }

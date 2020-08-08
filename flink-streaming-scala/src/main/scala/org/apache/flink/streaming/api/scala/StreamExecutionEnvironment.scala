@@ -18,18 +18,18 @@
 
 package org.apache.flink.streaming.api.scala
 
-import java.util.concurrent.CompletableFuture
-
 import com.esotericsoftware.kryo.Serializer
-import org.apache.flink.annotation.{Internal, Public, PublicEvolving}
+import org.apache.flink.annotation.{Experimental, Internal, Public, PublicEvolving}
+import org.apache.flink.api.common.eventtime.WatermarkStrategy
 import org.apache.flink.api.common.io.{FileInputFormat, FilePathFilter, InputFormat}
 import org.apache.flink.api.common.restartstrategy.RestartStrategies.RestartStrategyConfiguration
 import org.apache.flink.api.common.typeinfo.TypeInformation
+import org.apache.flink.api.connector.source.{Source, SourceSplit}
 import org.apache.flink.api.java.typeutils.ResultTypeQueryable
 import org.apache.flink.api.java.typeutils.runtime.kryo.KryoSerializer
 import org.apache.flink.api.scala.ClosureCleaner
 import org.apache.flink.configuration.{Configuration, ReadableConfig}
-import org.apache.flink.core.execution.JobClient
+import org.apache.flink.core.execution.{JobClient, JobListener}
 import org.apache.flink.runtime.state.AbstractStateBackend
 import org.apache.flink.runtime.state.StateBackend
 import org.apache.flink.streaming.api.environment.{StreamExecutionEnvironment => JavaEnv}
@@ -58,6 +58,12 @@ class StreamExecutionEnvironment(javaEnv: JavaEnv) {
     * Gets cache files.
     */
   def getCachedFiles = javaEnv.getCachedFiles
+
+  /**
+    * Gets the config JobListeners.
+    */
+  @PublicEvolving
+  def getJobListeners = javaEnv.getJobListeners
 
   /**
    * Sets the parallelism for operations executed through this environment.
@@ -657,6 +663,19 @@ class StreamExecutionEnvironment(javaEnv: JavaEnv) {
   }
 
   /**
+    * Create a DataStream using a [[Source]].
+    */
+  @Experimental
+  def fromSource[T: TypeInformation](
+      source: Source[T, _ <: SourceSplit, _],
+      watermarkStrategy: WatermarkStrategy[T],
+      sourceName: String): DataStream[T] = {
+
+    val typeInfo = implicitly[TypeInformation[T]]
+    asScalaStream(javaEnv.fromSource(source, watermarkStrategy, sourceName, typeInfo))
+  }
+
+  /**
    * Triggers the program execution. The environment will execute all parts of
    * the program that have resulted in a "sink" operation. Sink operations are
    * for example printing results or forwarding them to a message queue.
@@ -680,6 +699,22 @@ class StreamExecutionEnvironment(javaEnv: JavaEnv) {
   def execute(jobName: String) = javaEnv.execute(jobName)
 
   /**
+   * Register a [[JobListener]] in this environment. The [[JobListener]] will be
+   * notified on specific job status changed.
+   */
+  @PublicEvolving
+  def registerJobListener(jobListener: JobListener): Unit = {
+    javaEnv.registerJobListener(jobListener)
+  }
+
+  /**
+   * Clear all registered [[JobListener]]s.
+   */
+  @PublicEvolving def clearJobListeners(): Unit = {
+    javaEnv.clearJobListeners()
+  }
+
+  /**
    * Triggers the program execution asynchronously. The environment will execute all parts of
    * the program that have resulted in a "sink" operation. Sink operations are
    * for example printing results or forwarding them to a message queue.
@@ -692,11 +727,11 @@ class StreamExecutionEnvironment(javaEnv: JavaEnv) {
    * its usage. In other case, there may be resource leaks depending on the JobClient
    * implementation.
    *
-   * @return A future of [[JobClient]] that can be used to communicate with the submitted job,
+   * @return A [[JobClient]] that can be used to communicate with the submitted job,
    *         completed on submission succeeded.
    */
   @PublicEvolving
-  def executeAsync(): CompletableFuture[JobClient] = javaEnv.executeAsync()
+  def executeAsync(): JobClient = javaEnv.executeAsync()
 
   /**
    * Triggers the program execution asynchronously. The environment will execute all parts of
@@ -710,11 +745,11 @@ class StreamExecutionEnvironment(javaEnv: JavaEnv) {
    * its usage. In other case, there may be resource leaks depending on the JobClient
    * implementation.
    *
-   * @return A future of [[JobClient]] that can be used to communicate with the submitted job,
+   * @return A [[JobClient]] that can be used to communicate with the submitted job,
    *         completed on submission succeeded.
    */
   @PublicEvolving
-  def executeAsync(jobName: String): CompletableFuture[JobClient] = javaEnv.executeAsync(jobName)
+  def executeAsync(jobName: String): JobClient = javaEnv.executeAsync(jobName)
 
   /**
    * Creates the plan with which the system will execute the program, and
@@ -726,11 +761,39 @@ class StreamExecutionEnvironment(javaEnv: JavaEnv) {
 
   /**
    * Getter of the [[org.apache.flink.streaming.api.graph.StreamGraph]] of the streaming job.
+   * This call clears previously registered
+   * [[org.apache.flink.api.dag.Transformation transformations]].
    *
    * @return The StreamGraph representing the transformations
    */
   @Internal
   def getStreamGraph = javaEnv.getStreamGraph
+
+  /**
+   * Getter of the [[org.apache.flink.streaming.api.graph.StreamGraph]] of the streaming job.
+   * This call clears previously registered
+   * [[org.apache.flink.api.dag.Transformation transformations]].
+   *
+   * @param jobName Desired name of the job
+   * @return The StreamGraph representing the transformations
+   */
+  @Internal
+  def getStreamGraph(jobName: String) = javaEnv.getStreamGraph(jobName)
+
+  /**
+   * Getter of the [[org.apache.flink.streaming.api.graph.StreamGraph]] of the streaming job
+   * with the option to clear previously registered
+   * [[org.apache.flink.api.dag.Transformation transformations]]. Clearing the transformations
+   * allows, for example, to not re-execute the same operations when calling
+   * [[execute()]] multiple times.
+   *
+   * @param jobName Desired name of the job
+   * @param clearTransformations Whether or not to clear previously registered transformations
+   * @return The StreamGraph representing the transformations
+   */
+  @Internal
+  def getStreamGraph(jobName: String, clearTransformations: Boolean) =
+    javaEnv.getStreamGraph(jobName, clearTransformations)
 
   /**
    * Getter of the wrapped [[org.apache.flink.streaming.api.environment.StreamExecutionEnvironment]]

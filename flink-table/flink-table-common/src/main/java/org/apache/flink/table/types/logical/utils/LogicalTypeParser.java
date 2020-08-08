@@ -19,8 +19,7 @@
 package org.apache.flink.table.types.logical.utils;
 
 import org.apache.flink.annotation.PublicEvolving;
-import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
-import org.apache.flink.core.memory.DataInputDeserializer;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.UnresolvedIdentifier;
 import org.apache.flink.table.types.logical.ArrayType;
@@ -35,8 +34,10 @@ import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.DoubleType;
 import org.apache.flink.table.types.logical.FloatType;
 import org.apache.flink.table.types.logical.IntType;
+import org.apache.flink.table.types.logical.LegacyTypeInformationType;
 import org.apache.flink.table.types.logical.LocalZonedTimestampType;
 import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.MultisetType;
 import org.apache.flink.table.types.logical.NullType;
@@ -52,7 +53,7 @@ import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.table.types.logical.YearMonthIntervalType;
 import org.apache.flink.table.types.logical.YearMonthIntervalType.YearMonthResolution;
 import org.apache.flink.table.types.logical.ZonedTimestampType;
-import org.apache.flink.table.utils.EncodingUtils;
+import org.apache.flink.table.utils.TypeStringUtils;
 
 import javax.annotation.Nullable;
 
@@ -302,6 +303,7 @@ public final class LogicalTypeParser {
 		ROW,
 		NULL,
 		RAW,
+		LEGACY,
 		NOT
 	}
 
@@ -540,6 +542,8 @@ public final class LogicalTypeParser {
 					return new NullType();
 				case RAW:
 					return parseRawType();
+				case LEGACY:
+					return parseLegacyType();
 				default:
 					throw parsingError("Unsupported type: " + token().value);
 			}
@@ -881,21 +885,31 @@ public final class LogicalTypeParser {
 
 			nextToken(TokenType.LIST_SEPARATOR);
 			nextToken(TokenType.LITERAL_STRING);
-			final String serializer = tokenAsString();
+			final String serializerString = tokenAsString();
+			nextToken(TokenType.END_PARAMETER);
+
+			return RawType.restore(classLoader, className, serializerString);
+		}
+
+		@SuppressWarnings("unchecked")
+		private LogicalType parseLegacyType() {
+			nextToken(TokenType.BEGIN_PARAMETER);
+			nextToken(TokenType.LITERAL_STRING);
+			final String rootString = tokenAsString();
+
+			nextToken(TokenType.LIST_SEPARATOR);
+			nextToken(TokenType.LITERAL_STRING);
+			final String typeInfoString = tokenAsString();
 			nextToken(TokenType.END_PARAMETER);
 
 			try {
-				final Class<?> clazz = Class.forName(className, true, classLoader);
-				final byte[] bytes = EncodingUtils.decodeBase64ToBytes(serializer);
-				final DataInputDeserializer inputDeserializer = new DataInputDeserializer(bytes);
-				final TypeSerializerSnapshot<?> snapshot = TypeSerializerSnapshot.readVersionedSnapshot(
-					inputDeserializer,
-					classLoader);
-				return new RawType(clazz, snapshot.restoreSerializer());
+				final LogicalTypeRoot root = LogicalTypeRoot.valueOf(rootString);
+				final TypeInformation typeInfo = TypeStringUtils.readTypeInfo(typeInfoString);
+				return new LegacyTypeInformationType<>(root, typeInfo);
 			} catch (Throwable t) {
 				throw parsingError(
-					"Unable to restore the RAW type of class '" + className + "' with " +
-						"serializer snapshot '" + serializer + "'.", t);
+						"Unable to restore the Legacy type of '" + typeInfoString + "' with " +
+								"type root '" + rootString + "'.", t);
 			}
 		}
 	}

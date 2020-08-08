@@ -89,7 +89,7 @@ public class CliFrontendRunTest extends CliFrontendTestBase {
 			String[] parameters = {"-s", "expectedSavepointPath", getTestJarPath()};
 
 			CommandLine commandLine = CliFrontendParser.parse(CliFrontendParser.RUN_OPTIONS, parameters, true);
-			ProgramOptions programOptions = new ProgramOptions(commandLine);
+			ProgramOptions programOptions = ProgramOptions.create(commandLine);
 			ExecutionConfigAccessor executionOptions = ExecutionConfigAccessor.fromProgramOptions(programOptions, Collections.emptyList());
 
 			SavepointRestoreSettings savepointSettings = executionOptions.getSavepointRestoreSettings();
@@ -103,7 +103,7 @@ public class CliFrontendRunTest extends CliFrontendTestBase {
 			String[] parameters = {"-s", "expectedSavepointPath", "-n", getTestJarPath()};
 
 			CommandLine commandLine = CliFrontendParser.parse(CliFrontendParser.RUN_OPTIONS, parameters, true);
-			ProgramOptions programOptions = new ProgramOptions(commandLine);
+			ProgramOptions programOptions = ProgramOptions.create(commandLine);
 			ExecutionConfigAccessor executionOptions = ExecutionConfigAccessor.fromProgramOptions(programOptions, Collections.emptyList());
 
 			SavepointRestoreSettings savepointSettings = executionOptions.getSavepointRestoreSettings();
@@ -118,7 +118,7 @@ public class CliFrontendRunTest extends CliFrontendTestBase {
 				{ getTestJarPath(), "-arg1", "value1", "justavalue", "--arg2", "value2"};
 
 			CommandLine commandLine = CliFrontendParser.parse(CliFrontendParser.RUN_OPTIONS, parameters, true);
-			ProgramOptions programOptions = new ProgramOptions(commandLine);
+			ProgramOptions programOptions = ProgramOptions.create(commandLine);
 
 			assertEquals("-arg1", programOptions.getProgramArgs()[0]);
 			assertEquals("value1", programOptions.getProgramArgs()[1]);

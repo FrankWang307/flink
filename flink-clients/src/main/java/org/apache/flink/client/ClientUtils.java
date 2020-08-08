@@ -19,18 +19,16 @@
 package org.apache.flink.client;
 
 import org.apache.flink.api.common.JobExecutionResult;
-import org.apache.flink.api.common.JobSubmissionResult;
 import org.apache.flink.client.program.ClusterClient;
 import org.apache.flink.client.program.ContextEnvironment;
-import org.apache.flink.client.program.ContextEnvironmentFactory;
 import org.apache.flink.client.program.PackagedProgram;
 import org.apache.flink.client.program.ProgramInvocationException;
-import org.apache.flink.client.program.ProgramMissingJobException;
+import org.apache.flink.client.program.StreamContextEnvironment;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.DeploymentOptions;
 import org.apache.flink.core.execution.DetachedJobExecutionResult;
-import org.apache.flink.core.execution.ExecutorServiceLoader;
+import org.apache.flink.core.execution.PipelineExecutorServiceLoader;
 import org.apache.flink.runtime.client.JobExecutionException;
 import org.apache.flink.runtime.execution.librarycache.FlinkUserCodeClassLoaders;
 import org.apache.flink.runtime.jobgraph.JobGraph;
@@ -44,8 +42,8 @@ import java.io.IOException;
 import java.net.URL;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicReference;
 
+import static org.apache.flink.util.FlinkUserCodeClassLoader.NOOP_EXCEPTION_HANDLER;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
@@ -73,7 +71,7 @@ public enum ClientUtils {
 			configuration.getString(CoreOptions.CLASSLOADER_RESOLVE_ORDER);
 		FlinkUserCodeClassLoaders.ResolveOrder resolveOrder =
 			FlinkUserCodeClassLoaders.ResolveOrder.fromString(classLoaderResolveOrder);
-		return FlinkUserCodeClassLoaders.create(resolveOrder, urls, parent, alwaysParentFirstLoaderPatterns);
+		return FlinkUserCodeClassLoaders.create(resolveOrder, urls, parent, alwaysParentFirstLoaderPatterns, NOOP_EXCEPTION_HANDLER);
 	}
 
 	public static JobExecutionResult submitJob(
@@ -119,42 +117,41 @@ public enum ClientUtils {
 		}
 	}
 
-	public static JobSubmissionResult executeProgram(
-			ExecutorServiceLoader executorServiceLoader,
+	public static void executeProgram(
+			PipelineExecutorServiceLoader executorServiceLoader,
 			Configuration configuration,
-			PackagedProgram program) throws ProgramMissingJobException, ProgramInvocationException {
-
+			PackagedProgram program,
+			boolean enforceSingleJobExecution,
+			boolean suppressSysout) throws ProgramInvocationException {
 		checkNotNull(executorServiceLoader);
 		final ClassLoader userCodeClassLoader = program.getUserCodeClassLoader();
-
 		final ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
 		try {
 			Thread.currentThread().setContextClassLoader(userCodeClassLoader);
 
 			LOG.info("Starting program (detached: {})", !configuration.getBoolean(DeploymentOptions.ATTACHED));
 
-			final AtomicReference<JobExecutionResult> jobExecutionResult = new AtomicReference<>();
+			ContextEnvironment.setAsContext(
+				executorServiceLoader,
+				configuration,
+				userCodeClassLoader,
+				enforceSingleJobExecution,
+				suppressSysout);
 
-			ContextEnvironmentFactory factory = new ContextEnvironmentFactory(
-					executorServiceLoader,
-					configuration,
-					userCodeClassLoader,
-					jobExecutionResult);
-			ContextEnvironment.setAsContext(factory);
+			StreamContextEnvironment.setAsContext(
+				executorServiceLoader,
+				configuration,
+				userCodeClassLoader,
+				enforceSingleJobExecution,
+				suppressSysout);
 
 			try {
 				program.invokeInteractiveModeForExecution();
-
-				JobExecutionResult result = jobExecutionResult.get();
-				if (result == null) {
-					throw new ProgramMissingJobException("The program didn't contain a Flink job.");
-				}
-				return result;
 			} finally {
-				ContextEnvironment.unsetContext();
+				ContextEnvironment.unsetAsContext();
+				StreamContextEnvironment.unsetAsContext();
 			}
-		}
-		finally {
+		} finally {
 			Thread.currentThread().setContextClassLoader(contextClassLoader);
 		}
 	}
